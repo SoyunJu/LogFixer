@@ -1,0 +1,18 @@
+# 라이브러리 및 빌드 결과물
+lib/
+bin/
+out/
+build/
+target/
+
+# 인텔리제이 설정 파일
+.idea/
+*.iml
+
+# OS 및 기타 설정
+.DS_Store
+Thumbs.db
+
+# 로그 및 임시 파일
+*.log
+tmp/
