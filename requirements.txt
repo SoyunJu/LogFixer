@@ -1,0 +1,39 @@
+# Web Framework
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+
+# DB (MariaDB)
+sqlalchemy==2.0.36
+aiomysql==0.2.0
+alembic==1.13.3
+
+# Validation / Settings
+pydantic==2.9.2
+pydantic-settings==2.5.2
+
+# Scheduler
+apscheduler==3.10.4
+
+# Vector DB
+qdrant-client==1.12.0
+
+# Embedding (OpenAI)
+openai==1.51.0
+
+# HTTP Client
+httpx==0.27.2
+
+# Slack
+slack-sdk==3.33.1
+
+# SSH (Agent)
+paramiko==3.5.0
+
+# Elasticsearch
+elasticsearch==8.15.1
+
+# Logging
+python-json-logger==2.0.7
+
+# Env
+python-dotenv==1.0.1
