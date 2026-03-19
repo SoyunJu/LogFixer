@@ -46,3 +46,9 @@ class LfIncident(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)   # LC data
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    # 분석 결과
+    root_cause: Mapped[str] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float] = mapped_column(nullable=True)
+    solutions_json: Mapped[str] = mapped_column(Text, nullable=True)  # JSON 직렬화
+    rag_sources_json: Mapped[str] = mapped_column(Text, nullable=True)  # JSON 직렬화
