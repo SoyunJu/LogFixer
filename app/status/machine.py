@@ -1,5 +1,5 @@
+
 import logging
-from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,7 @@ from app.schemas.incident import IncidentWebhookRequest
 
 logger = logging.getLogger(__name__)
 
+# 허용된 상태 전이 맵
 ALLOWED_TRANSITIONS: dict[IncidentState, list[IncidentState]] = {
     IncidentState.RECEIVED:         [IncidentState.ANALYZING],
     IncidentState.ANALYZING:        [IncidentState.PENDING_APPROVAL],
@@ -24,7 +25,8 @@ ALLOWED_TRANSITIONS: dict[IncidentState, list[IncidentState]] = {
     IncidentState.ESCALATED:        [],
 }
 
-# webhook -> upsert -------------------------------------------------------------
+
+# webhook -> upsert -------------------------------------------
 async def upsert_incident(
         db: AsyncSession,
         payload: IncidentWebhookRequest,
@@ -36,7 +38,7 @@ async def upsert_incident(
     incident = result.scalar_one_or_none()
 
     if incident is None:
-        # New Webhook: RECEIVED state
+        # 신규: RECEIVED 상태로 저장
         incident = LfIncident(
             log_hash=payload.logHash,
             service_name=payload.serviceName,
@@ -52,18 +54,31 @@ async def upsert_incident(
         db.add(incident)
         logger.info("[Incident][NEW] logHash=%s service=%s", payload.logHash, payload.serviceName)
     else:
-        # repeat : time, count update
+        # 재발: +repeat_count
         incident.repeat_count = payload.repeatCount
         incident.impacted_host_count = payload.impactedHostCount
         incident.occurred_at = payload.occurredTime
-        logger.info("[Incident][UPDATE] logHash=%s repeatCount=%d", payload.logHash, payload.repeatCount)
+
+        # If LogCollector : RESOLVED → NEW
+        if incident.state == IncidentState.RESOLVED:
+            incident.state = IncidentState.RECEIVED
+            incident.retry_count = 0
+            logger.info(
+                "[Incident][REOPEN] RESOLVED → RECEIVED logHash=%s repeatCount=%d",
+                payload.logHash, payload.repeatCount,
+            )
+        else:
+            logger.info(
+                "[Incident][UPDATE] logHash=%s state=%s repeatCount=%d",
+                payload.logHash, incident.state, payload.repeatCount,
+            )
 
     await db.commit()
     await db.refresh(incident)
     return incident
 
 
- # allowed state update ------------------------------------------------------
+# 허용된 상태 전이 실행 -------------------------------------------
 async def transition(
         db: AsyncSession,
         log_hash: str,
@@ -92,7 +107,8 @@ async def transition(
     await db.refresh(incident)
     return incident
 
- # Helper : Loghash -> Incident search ----------------------------------------------------
+
+# logHash → Incident 단건 조회 -------------------------------------------
 async def get_incident(
         db: AsyncSession,
         log_hash: str,

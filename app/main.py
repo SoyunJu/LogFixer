@@ -1,12 +1,16 @@
+# 경로: app/main.py
+
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.middleware import logging_middleware
 from app.core.config import settings
 from app.core.exceptions import LogFixerException, logfixer_exception_handler
 from app.core.logging import setup_logging
 from app.db.session import create_tables
+from app.scheduler.poller import start_scheduler, stop_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -15,17 +19,22 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("LogFixer 시작 중... (env=%s)", settings.APP_ENV)
-    await create_tables()
-    logger.info("DB 테이블 준비 완료")
 
-    # Qdrant 컬렉션 초기화
+    await create_tables()
+    logger.info("=========== DB 테이블 준비 완료 ===========")
+
     from app.vectordb.store import init_collections
     await init_collections()
-    logger.info("Qdrant 컬렉션 준비 완료")
+    logger.info("=========== Qdrant 컬렉션 준비 완료 ===========")
+
+    start_scheduler()
+    logger.info("=========== 스케줄러 시작 ===========")
 
     yield
 
-    logger.info("LogFixer 종료")
+    stop_scheduler()
+    logger.info("=========== 스케줄러 종료 ===========")
+    logger.info("=========== LogFixer 종료 ===========")
 
 
 app = FastAPI(
@@ -38,18 +47,17 @@ app = FastAPI(
 # 전역 예외 핸들러
 app.add_exception_handler(LogFixerException, logfixer_exception_handler)
 
-# ---- 라우터 -----------------------
+# 요청/응답 로깅 미들웨어
+app.middleware("http")(logging_middleware)
+
+# ------------ 라우터 --------------------------------------
 from app.api.incident import router as incident_router
+from app.api.slack_action import router as slack_router
+
 app.include_router(incident_router, prefix="/api")
+app.include_router(slack_router, prefix="/api")
+
 
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "env": settings.APP_ENV}
-
-
-# --- Slack ------------------------
-from app.api import incident as incident_api
-from app.api import slack_action as slack_api
-
-app.include_router(incident_api.router, prefix="/api")
-app.include_router(slack_api.router, prefix="/api")

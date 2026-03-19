@@ -176,3 +176,27 @@ async def execute_incident(
         "actionsTaken": actions_taken,
         "allSuccess": all_success,
     }
+
+    # Resolved -> POST LogCollector
+@router.post("/{log_hash}/resolve", status_code=200)
+async def resolve_incident(
+        log_hash: str,
+        db: AsyncSession = Depends(get_db),
+):
+
+    from app.reporter.kb_updater import report_to_lc
+
+    incident = await transition(db, log_hash, IncidentState.RESOLVED)
+    logger.info("[Resolve] RESOLVED 처리 완료 logHash=%s", log_hash)
+
+    # LC에 상태변경 + addendum 저장
+    lc_ok = await report_to_lc(incident)
+    if not lc_ok:
+        logger.warning("[Resolve] LC 상태 변경 실패 logHash=%s", log_hash)
+
+    return {
+        "logHash": log_hash,
+        "state": "RESOLVED",
+        "lcReported": lc_ok,
+    }
+
