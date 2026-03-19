@@ -1,24 +1,10 @@
 # LogFixer — AI Agent 기반 장애 자동 해결 시스템
 
-> **장애 탐지부터 원인 분석, 서버 조치, 결과 보고까지 전 과정을 자동화한 AI Agent 백엔드 시스템**
+> **장애 탐지부터 원인 분석, 서버 조치, 결과 보고까지 전 과정을 자동화한 AI Agent 백엔드 시스템**  
+> Python · FastAPI · OpenAI API · RAG · SSH · Slack · Docker
 
-LogCollector(LC)와 연동하여 운영 중 발생하는 인프라 장애를 자동으로 탐지·분석·조치하고,  
-꼭 필요한 두 지점에서만 담당자의 Slack 승인을 받는 **Human-in-the-Loop** 구조로 설계했습니다.
-
-비전공·운영 출신으로서 반복적인 수동 장애 대응 경험을 바탕으로,  
-"이 과정이 자동화될 수 있지 않을까?"라는 질문에서 시작한 프로젝트입니다.
-
----
-
-## 핵심 구현 포인트
-
-| 항목 | 내용 |
-|---|---|
-| **LLM + RAG 기반 자동 분석** | Elasticsearch BM25와 Qdrant kNN을 RRF로 융합하는 하이브리드 검색으로 관련 KB를 수집하고, GPT-4o-mini가 근본 원인과 해결법 후보를 JSON으로 반환 |
-| **Human-in-the-Loop 설계** | 분석 결과 승인·RESOLVED 확정, 총 2단계에서만 Slack 버튼 승인을 받고 나머지는 완전 자동 처리 |
-| **SSH Agent 자동 실행** | 승인 후 대상 서버에 SSH로 접속해 액션을 순차 실행. 실패 시 성공한 액션을 역순 롤백하고 최대 3회 재시도 |
-| **상태머신 기반 신뢰성** | 7단계 IncidentState로 전이 규칙을 코드로 강제. 허용되지 않은 전이는 즉시 예외로 차단 |
-| **자기 학습 루프** | 해결 완료된 분석·조치 이력을 LC의 KbArticle addendum으로 저장 → 다음 유사 장애 RAG 검색에 자동 활용 |
+LogCollector(LC)와 webhook으로 연동하여 인프라 장애를 자동 분석·조치하고,  
+꼭 필요한 두 지점에서만 담당자의 Slack 승인을 받는 **Human-in-the-Loop** 구조를 구현했습니다.
 
 ---
 
@@ -37,71 +23,28 @@ LogCollector(LC)와 연동하여 운영 중 발생하는 인프라 장애를 자
 
 ---
 
+## 핵심 구현 포인트
+
+| 항목 | 내용 |
+|---|---|
+| **LLM + RAG 파이프라인 구현** | Elasticsearch BM25와 Qdrant kNN을 RRF로 융합하는 하이브리드 검색으로 관련 KB를 수집하고, GPT-4o-mini가 근본 원인과 해결법 후보를 JSON으로 반환하는 2-step 분석 파이프라인 구현 |
+| **OpenAI API 연동 (LLM + Embedding)** | GPT-4o-mini로 구조화된 JSON 응답 생성, text-embedding-3-small로 KB 문서 임베딩. 두 API를 분석 파이프라인 안에서 목적에 맞게 분리하여 활용 |
+| **외부 서비스 복합 연동** | Slack Interactive Actions (버튼 승인·재분석), Paramiko SSH 원격 실행, LogCollector REST API 호출을 하나의 자동화 흐름 안에 통합 |
+| **Human-in-the-Loop 설계** | 분석 결과 승인·RESOLVED 확정, 총 2단계에서만 Slack 버튼 승인을 받고 나머지는 완전 자동 처리 |
+| **상태머신 기반 신뢰성** | 7단계 IncidentState로 전이 규칙을 코드로 강제. 허용되지 않은 전이는 즉시 예외로 차단 |
+| **자기 학습 루프** | 해결 완료된 분석·조치 이력을 LC의 KbArticle addendum으로 저장 → 다음 유사 장애 RAG 검색에 자동 활용 |
+
+---
+
 ## 시스템 아키텍처
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                           LogFixer                               │
-│                                                                  │
-│  Webhook        Analyzer                Agent           Reporter │
-│  ──────────     ─────────────────────   ──────────────  ─────── │
-│  POST           ES BM25 검색            SSH 접속         LC PATCH│
-│  /api/incident  Qdrant kNN 검색    →   액션 순차 실행  → LC GET  │
-│       ↓         RRF 재랭킹              실패 시 역순 롤백  LC POST│
-│  DB 저장        GPT-4o-mini 분석        재시도 (max 3)           │
-│  상태 전이      해결법 순위 생성                                  │
-│                      ↓                                           │
-│              Slack 승인 요청 ────────→ 담당자 승인 / 재분석      │
-│                                                                  │
-│  Scheduler: EXECUTING 상태 감시(30s) / 고빈도 재발 감지(5m)     │
-└──────────────────────────────────────────────────────────────────┘
-         ↑ webhook push                      ↓ REST API 호출
-┌─────────────────┐                ┌──────────────────────────┐
-│  LogCollector   │                │  대상 서버 (SSH)         │
-│  (장애 감지·    │                │  systemctl / sed /       │
-│   KB 관리)      │                │  drop_caches / rm        │
-└─────────────────┘                └──────────────────────────┘
-```
+![시스템 아키텍처](docs/images/architecture.svg)
 
 ---
 
 ## 전체 처리 흐름
 
-```
-[LogCollector] 장애 감지
-      │ POST /api/incident (webhook)
-      ▼
-① RECEIVED       ── DB upsert / 재발이면 RESOLVED → RECEIVED 재오픈
-      │
-      ▼
-② ANALYZING      ── ES BM25 + Qdrant kNN → RRF 재랭킹
-                 ── GPT-4o-mini ① root_cause + confidence 분석
-                 ── GPT-4o-mini ② solutions ranking 생성
-      │
-      ▼
-③ PENDING_APPROVAL ── Slack 승인 요청 발송
-      │                   [✅ 승인] → EXECUTING
-      │                   [❌ 재분석] → RECEIVED
-      ▼ (승인)
-④ EXECUTING      ── SSH 액션 순차 실행
-                 ──   RESTART      : systemctl restart <service>
-                 ──   EDIT_CONFIG  : sed -i  (변경 전 값 백업)
-                 ──   CLEAR_MEMORY : drop_caches
-                 ──   DEL_DISK     : 14일 이상 .log 삭제
-      │
-      ├─[성공]─ Slack 실행 완료 보고 발송
-      │              └─ 담당자 [✅ RESOLVED 승인]
-      │                        ▼
-      │                ⑤ RESOLVED
-      │                   ├─ LC PATCH 상태 변경
-      │                   ├─ LC GET  kbArticleId (최대 5회 retry)
-      │                   └─ LC POST addendum 저장 (분석 결과 + 실행 이력)
-      │
-      └─[실패]─ ⑥ ROLLING_BACK ── 성공한 액션 역순 롤백
-                      │
-                      ├─ retry < 3  → ① RECEIVED (재분석·재시도)
-                      └─ retry ≥ 3  → ⑦ ESCALATED (수동 대응 전환)
-```
+![전체 처리 흐름](docs/images/process_flow.svg)
 
 ---
 
@@ -109,153 +52,102 @@ LogCollector(LC)와 연동하여 운영 중 발생하는 인프라 장애를 자
 
 ### 1. LC → LogFixer 웹훅 수신
 
-LogCollector가 장애를 감지하면 LogFixer의 `/api/incident` 엔드포인트로 웹훅을 전송합니다.  
+LogCollector가 장애를 감지하면 LogFixer `/api/incident`로 웹훅을 전송합니다.  
 수신 즉시 DB에 저장하고 `RECEIVED` 상태로 응답합니다.
 
-<!-- 이미지 삽입 위치 -->
-<!-- 파일명: LC_LF_로그처리받기.png -->
-<!-- 설명: PowerShell에서 웹훅 POST 전송 → logHash=flow001 RECEIVED 응답 확인 -->
-```
-[IMAGE: LC_LF_로그처리받기.png]
-PowerShell 웹훅 전송 → RECEIVED 상태 저장 확인
-```
+<!-- 이미지 삽입: docs/images/LC_LF_로그처리받기.png -->
+<!-- 설명: PowerShell 웹훅 POST 전송 → logHash=flow001 RECEIVED 응답 확인 -->
+![웹훅 수신 및 RECEIVED 저장](docs/images/LC_LF_로그처리받기.png)
 
-<!-- 파일명: LC_LF_로그처리받기_2.png -->
-<!-- 설명: GET /api/incident/flow001 조회 결과 — id, state, retry_count 등 전체 필드 확인 -->
-```
-[IMAGE: LC_LF_로그처리받기_2.png]
-GET 조회: state=RECEIVED, retry_count=0 등 DB 저장 상태 확인
-```
+<!-- 이미지 삽입: docs/images/LC_LF_로그처리받기_2.png -->
+<!-- 설명: GET /api/incident/flow001 — state, retry_count 등 DB 저장 상태 조회 -->
+![인시던트 상태 조회](docs/images/LC_LF_로그처리받기_2.png)
 
 ---
 
 ### 2. RAG + LLM 자동 분석
 
-웹훅 수신 후 ES BM25 + Qdrant kNN으로 유사 KB를 검색하고,  
-RRF 재랭킹 결과를 컨텍스트로 GPT-4o-mini 2-step 분석을 실행합니다.  
+ES BM25 + Qdrant kNN으로 유사 KB를 검색하고, RRF 재랭킹 결과를 컨텍스트로  
+GPT-4o-mini 2-step 분석(root_cause → solutions ranking)을 실행합니다.  
 분석 완료 시 `PENDING_APPROVAL` 상태로 전이하고 Slack 승인 요청을 발송합니다.
 
-<!-- 이미지 삽입 위치 -->
-<!-- 파일명: RAG_AI분석.png -->
-<!-- 설명: 터미널 로그 — BM25/kNN 검색 → RRF → LLM 2-step 분석 → PENDING_APPROVAL 전이 → Slack 알림 발송 전 과정 로그 -->
-```
-[IMAGE: RAG_AI분석.png]
-RAG 검색 → GPT-4o-mini 분석 → PENDING_APPROVAL 전이 → Slack 발송 전체 로그
-```
+<!-- 이미지 삽입: docs/images/RAG_AI분석.png -->
+<!-- 설명: BM25/kNN 검색 → RRF → LLM 2-step → PENDING_APPROVAL 전이 → Slack 발송 전 과정 로그 -->
+![RAG 검색 및 LLM 분석 로그](docs/images/RAG_AI분석.png)
 
 ---
 
 ### 3. Slack 장애 분석 결과 알림 (승인 요청)
 
-분석이 완료되면 서비스명·원인·신뢰도·해결법 후보를 Slack으로 전송합니다.  
+분석 완료 시 서비스명·원인·신뢰도·해결법 후보를 Slack으로 전송합니다.  
 담당자는 `[✅ 승인]` 또는 `[❌ 재분석]` 버튼으로 응답합니다.
 
-<!-- 이미지 삽입 위치 -->
-<!-- 파일명: 슬랙—승인요청알림.png  (풀스크린 슬랙 화면) -->
-<!-- 설명: Slack #error_manager 채널 — "[LogFixer] 장애 분석 완료 | 승인 요청" 메시지, 서비스/원인/신뢰도85%/해결법 3개 표시, ✅ 승인 / ❌ 재분석 버튼 -->
-```
-[IMAGE: 슬랙—승인요청알림.png]
-Slack 알림: 서비스·원인·신뢰도·해결법 후보 + 승인/재분석 버튼
-```
-
-<!-- (선택) 파일명: LF분석_슬랙알림.png -->
-<!-- 설명: PowerShell 분석 API 응답(rootCause, confidence, solutions)과 슬랙 알림 화면을 함께 보여줌 -->
-```
-[IMAGE: LF분석_슬랙알림.png]  ← 선택적 추가 (API 응답과 슬랙 알림 동시 확인)
-analyze API 응답값 + Slack 알림 화면
-```
+<!-- 이미지 삽입: docs/images/슬랙—승인요청알림.png -->
+<!-- 설명: Slack #error_manager 채널 — 분석 결과 메시지, 신뢰도 85%, 해결법 3개, 승인/재분석 버튼 -->
+![Slack 장애 분석 결과 알림](docs/images/슬랙—승인요청알림.png)
 
 ---
 
 ### 4. Slack 승인 → 상태 전이
 
-담당자가 `[✅ 승인]` 버튼을 누르면 `/api/slack/actions` 엔드포인트가 호출되고  
+`[✅ 승인]` 버튼을 누르면 `/api/slack/actions`가 호출되고  
 `PENDING_APPROVAL → EXECUTING` 상태 전이가 이루어집니다.
 
-<!-- 이미지 삽입 위치 -->
-<!-- 파일명: 슬랙승인시_state전이.png -->
-<!-- 설명: PowerShell approve payload 전송 → 터미널 로그에서 "[Slack] 승인 완료 logHash=flow001 user=테스트유저" 확인 -->
-```
-[IMAGE: 슬랙승인시_state전이.png]
-Slack 승인 액션 수신 → PENDING_APPROVAL → EXECUTING 전이 로그
-```
+<!-- 이미지 삽입: docs/images/슬랙승인시_state전이.png -->
+<!-- 설명: approve payload 수신 → "[Slack] 승인 완료 logHash=flow001" 로그 -->
+![Slack 승인 처리 및 EXECUTING 전이](docs/images/슬랙승인시_state전이.png)
 
 ---
 
 ### 5. 해결 완료 → LC에 결과 보고 (resolve)
 
-실행 성공 후 담당자 승인을 통해 `RESOLVED` 처리를 하면,  
+실행 성공 후 담당자 승인을 통해 `RESOLVED` 처리 시,  
 LC에 순서대로 상태 변경 → kbArticleId 조회 → addendum 저장을 호출합니다.
 
-<!-- 이미지 삽입 위치 -->
-<!-- 파일명: LF_resolve처리_전.png -->
-<!-- 설명: Swagger UI에서 /api/incident/{log_hash}/resolve 실행 전 — LC 화면에서 해당 incident가 IN_PROGRESS 상태 -->
-```
-[IMAGE: LF_resolve처리_전.png]
-resolve 호출 전: LC 화면에서 incident 상태 IN_PROGRESS
-```
+<!-- 이미지 삽입: docs/images/LF_resolve처리_전.png -->
+<!-- 설명: resolve 호출 전 — LC 화면에서 해당 incident IN_PROGRESS 상태 -->
+![resolve 처리 전 (LC IN_PROGRESS 상태)](docs/images/LF_resolve처리_전.png)
 
-<!-- 파일명: LF_resolve처리_후.png -->
-<!-- 설명: resolve POST 실행 후 — 응답 body에 state: RESOLVED, lcReported: true / LC 화면에서 RESOLVED로 변경 확인 -->
-```
-[IMAGE: LF_resolve처리_후.png]
-resolve 처리 후: LC 상태 RESOLVED 반영 확인 (lcReported: true)
-```
+<!-- 이미지 삽입: docs/images/LF_resolve처리_후.png -->
+<!-- 설명: resolve POST 후 — 응답 body state: RESOLVED, lcReported: true / LC 화면 RESOLVED 반영 -->
+![resolve 처리 후 (LC RESOLVED 반영, lcReported: true)](docs/images/LF_resolve처리_후.png)
 
 ---
 
-### 6. 해결 실패 시 — 자동 롤백
+### 6. 해결 실패 시 — 자동 롤백 및 재시도
 
-SSH 실행이 실패하면 `ROLLING_BACK` 상태로 전이하고, 성공했던 액션들을 역순으로 롤백합니다.  
+SSH 실행이 실패하면 `ROLLING_BACK` 상태로 전이하고, 성공한 액션들을 역순으로 롤백합니다.  
 `retry_count < 3`이면 `RECEIVED`로 복귀해 재분석을 재시도합니다.
 
-<!-- 이미지 삽입 위치 -->
-<!-- 파일명: 해결실패시_롤백.png -->
-<!-- 설명: 존재하지 않는 호스트(999.999.999.999)로 실행 시도 → SSH 접속 실패 → ROLLING_BACK 전이 로그 -->
-```
-[IMAGE: 해결실패시_롤백.png]
-SSH 실패 감지 → ROLLING_BACK 상태 전이
-```
+<!-- 이미지 삽입: docs/images/해결실패시_롤백.png -->
+<!-- 설명: 존재하지 않는 호스트로 실행 시도 → SSH 실패 → ROLLING_BACK 전이 로그 -->
+![SSH 실패 감지 및 ROLLING_BACK 전이](docs/images/해결실패시_롤백.png)
 
-<!-- 파일명: 롤백처리.png + 롤백처리_2.png -->
-<!-- 설명: 롤백 실행 로그 (ROLLING_BACK → RECEIVED 전이) + 롤백 완료 후 retry=1 카운트 -->
-```
-[IMAGE: 롤백처리.png]
-롤백 실행 로그: ROLLING_BACK → RECEIVED 재오픈
-
-[IMAGE: 롤백처리_2.png]
-롤백 완료: retry=1 증가, RECEIVED 상태로 재시도 대기
-```
+<!-- 이미지 삽입: docs/images/롤백처리.png -->
+<!-- 설명: ROLLING_BACK → RECEIVED 재오픈 로그 -->
+![롤백 실행 및 RECEIVED 재오픈](docs/images/롤백처리.png)
 
 ---
 
 ### 7. 재발 감지 → 자동 재오픈
 
 이미 `RESOLVED` 처리된 장애와 동일한 `logHash`로 웹훅이 재수신되면,  
-`RESOLVED → RECEIVED` 상태 전이와 함께 retry_count를 초기화하고 재분석을 시작합니다.
+`RESOLVED → RECEIVED` 전이와 함께 retry_count를 초기화하고 재분석을 시작합니다.
 
-<!-- 이미지 삽입 위치 -->
-<!-- 파일명: 재발_state전이.png -->
-<!-- 설명: 동일 logHash (flow001)로 재발 웹훅 전송 → state=RECEIVED로 재오픈, repeatCount=8로 갱신 -->
-```
-[IMAGE: 재발_state전이.png]
-동일 logHash 재수신 → RESOLVED → RECEIVED 재오픈, repeatCount 갱신
-```
+<!-- 이미지 삽입: docs/images/재발_state전이.png -->
+<!-- 설명: 동일 logHash 재수신 → RESOLVED → RECEIVED 재오픈, repeatCount 갱신 -->
+![재발 감지 및 RECEIVED 재오픈](docs/images/재발_state전이.png)
 
 ---
 
-### 8. KB Addendum 자동 작성
+### 8. KB Addendum 자동 작성 (자기 학습 루프)
 
 `RESOLVED` 처리 완료 후 LC의 KbArticle에 분석 결과·실행 내역·해결 시각이 자동으로 기록됩니다.  
-이 데이터는 다음 유사 장애 발생 시 RAG 검색 컨텍스트로 활용됩니다.
+이 데이터는 다음 유사 장애 발생 시 RAG 검색 컨텍스트로 재활용됩니다.
 
-<!-- 이미지 삽입 위치 -->
-<!-- 파일명: kb_addenum_자동_작성.png -->
-<!-- 설명: LC의 KB Article 상세 화면 — "Resolution Notes & Updates" 섹션에 LogFixer Agent가 자동 작성한 분석 결과/실행 내역/신뢰도 기재 -->
-```
-[IMAGE: kb_addenum_자동_작성.png]
-LC KB Article에 LogFixer가 자동 작성한 분석 결과 + 실행 이력 addendum
-```
+<!-- 이미지 삽입: docs/images/kb_addenum_자동_작성.png -->
+<!-- 설명: LC KB Article 상세 화면 — "Resolution Notes & Updates"에 LogFixer Agent가 자동 작성한 분석 결과/실행 내역/신뢰도 -->
+![KB Article에 자동 작성된 addendum](docs/images/kb_addenum_자동_작성.png)
 
 ---
 
