@@ -16,3 +16,5 @@ Thumbs.db
 # 로그 및 임시 파일
 *.log
 tmp/
+
+.env

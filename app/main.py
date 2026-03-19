@@ -45,3 +45,11 @@ app.include_router(incident_router, prefix="/api")
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "env": settings.APP_ENV}
+
+
+# --- Slack ------------------------
+from app.api import incident as incident_api
+from app.api import slack_action as slack_api
+
+app.include_router(incident_api.router, prefix="/api")
+app.include_router(slack_api.router, prefix="/api")

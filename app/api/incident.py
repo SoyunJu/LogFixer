@@ -37,17 +37,17 @@ async def get_incident_detail(
     return IncidentResponse.model_validate(incident)
 
 
-    # 분석 트리거 (dev/test) -> prod 는 scheduler(RECEIVED) Auto
+    # 분석 트리거 (dev/test) -> prod 는 scheduler(RECEIVED) Auto ---------------------
 @router.post("/{log_hash}/analyze", status_code=200)
 async def analyze_incident(
         log_hash: str,
         db: AsyncSession = Depends(get_db),
 ):
 
-    # ANALYZING
+    # 1) ANALYZING
     incident = await transition(db, log_hash, IncidentState.ANALYZING)
 
-    # LLM analyze
+    # 2) LLM analyze
     result = await run_analyze(
         log_hash=log_hash,
         service_name=incident.service_name,
@@ -55,10 +55,10 @@ async def analyze_incident(
         stack_trace=incident.stack_trace,
     )
 
-    # 검증
+    # 3) 검증
     is_valid, issues = validate(result)
 
-    # 분석 결과 DB 저장
+    # 4) 분석 결과 DB 저장
     incident.root_cause = result.root_cause
     incident.confidence = result.confidence
     incident.solutions_json = json.dumps(
@@ -70,6 +70,15 @@ async def analyze_incident(
     if is_valid:
         await transition(db, log_hash, IncidentState.PENDING_APPROVAL)
         logger.info("[Analyze] 검증 통과 → PENDING_APPROVAL logHash=%s", log_hash)
+
+        # Slack 승인 요청 발송
+        from app.notification.slack import send_approval_request
+        slack_ts = await send_approval_request(result=result, service_name=incident.service_name)
+
+        # FOR thread reply , message this
+        if slack_ts:
+            incident.slack_ts = slack_ts
+            await db.commit()
     else:
         logger.warning("[Analyze] 검증 실패 logHash=%s issues=%s", log_hash, issues)
 
