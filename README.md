@@ -84,7 +84,7 @@ GPT-4o-mini 2-step 분석(root_cause → solutions ranking)을 실행합니다.
 
 <!-- 이미지 삽입: docs/images/슬랙—승인요청알림.png -->
 <!-- 설명: Slack #error_manager 채널 — 분석 결과 메시지, 신뢰도 85%, 해결법 3개, 승인/재분석 버튼 -->
-![Slack 장애 분석 결과 알림](docs/images/슬랙—승인요청알림.png)
+![Slack 장애 분석 결과 알림](docs/images/슬랙_승인요청알림.png)
 
 ---
 
