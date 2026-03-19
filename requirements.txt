@@ -37,3 +37,4 @@ python-json-logger==2.0.7
 
 # Env
 python-dotenv==1.0.1
+python-multipart==0.0.12
