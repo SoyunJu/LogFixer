@@ -4,6 +4,7 @@ bin/
 out/
 build/
 target/
+venv/
 
 # 인텔리제이 설정 파일
 .idea/
